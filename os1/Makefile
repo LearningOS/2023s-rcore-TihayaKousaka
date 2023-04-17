@@ -3,12 +3,17 @@ TARGET := riscv64gc-unknown-none-elf
 MODE := release
 KERNEL_ELF := target/$(TARGET)/$(MODE)/os
 KERNEL_BIN := $(KERNEL_ELF).bin
-KERNEL_ASM := $(KERNEL_ELF).asm
+DISASM_TMP := target/$(TARGET)/$(MODE)/asm
 
 # BOARD
-BOARD ?= qemu
+BOARD := qemu
 SBI ?= rustsbi
 BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
+
+# Building mode argument
+ifeq ($(MODE), release)
+	MODE_ARG := --release
+endif
 
 # KERNEL ENTRY
 KERNEL_ENTRY_PA := 0x80200000
@@ -17,31 +22,43 @@ KERNEL_ENTRY_PA := 0x80200000
 OBJDUMP := rust-objdump --arch-name=riscv64
 OBJCOPY := rust-objcopy --binary-architecture=riscv64
 
-CHAPTER ?= 3
+CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]')
 TEST ?= $(CHAPTER)
 BASE ?= 1
 
-build: env $(KERNEL_BIN)
+# Disassembly
+DISASM ?= -x
 
-$(KERNEL_BIN): kernel
-	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
-	@$(OBJDUMP) $(KERNEL_ELF) -S > $(KERNEL_ELF).asm
+build: env $(KERNEL_BIN)
 
 env:
 	(rustup target list | grep "riscv64gc-unknown-none-elf (installed)") || rustup target add $(TARGET)
 	cargo install cargo-binutils
+	rustup component add rust-src
+	rustup component add llvm-tools-preview
 
 $(KERNEL_BIN): kernel
 	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
 
 kernel:
 	@make -C ../user build TEST=$(TEST) CHAPTER=$(CHAPTER) BASE=$(BASE)
-	@cargo build --release
+	@echo Platform: $(BOARD)
+	@cargo build $(MODE_ARG)
 
 clean:
 	@cargo clean
 
-run: build
+disasm: kernel
+	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) | less
+
+disasm-vim: kernel
+	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) > $(DISASM_TMP)
+	@vim $(DISASM_TMP)
+	@rm $(DISASM_TMP)
+
+run: run-inner
+
+run-inner: build
 	@qemu-system-riscv64 \
 		-machine virt \
 		-nographic \
@@ -54,7 +71,10 @@ debug: build
 		tmux split-window -h "riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'" && \
 		tmux -2 attach-session -d
 
-dbg: build
-	qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S
+gdbserver: build
+	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S
 
-.PHONY: build env kernel clean run-inner
+gdbclient:
+	@riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'
+
+.PHONY: build env kernel clean disasm disasm-vim run-inner gdbserver gdbclient

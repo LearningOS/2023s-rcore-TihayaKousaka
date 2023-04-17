@@ -6,7 +6,7 @@
 //! A single global instance of [`TaskManager`] called `TASK_MANAGER` controls
 //! all the tasks in the operating system.
 //!
-//! Be careful when you see [`__switch`]. Control flow around this function
+//! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
 //! might not be what you expect.
 
 mod context;
@@ -14,13 +14,11 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
+use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
-use crate::timer::get_time_us;
-
 use lazy_static::*;
-pub use switch::__switch;
+use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -41,8 +39,8 @@ pub struct TaskManager {
     inner: UPSafeCell<TaskManagerInner>,
 }
 
-/// The task manager inner in 'UPSafeCell'
-struct TaskManagerInner {
+/// Inner of Task Manager
+pub struct TaskManagerInner {
     /// task list
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
@@ -50,21 +48,17 @@ struct TaskManagerInner {
 }
 
 lazy_static! {
-    /// a `TaskManager` instance through lazy_static!
+    /// Global variable: TASK_MANAGER
     pub static ref TASK_MANAGER: TaskManager = {
         let num_app = get_num_app();
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
-            syscall_times: [0 as u32; MAX_SYSCALL_NUM],
-            start_time: 0 as usize,
         }; MAX_APP_NUM];
-
-        for (i, t) in tasks.iter_mut().enumerate().take(num_app) {
-            t.task_cx = TaskContext::goto_restore(init_app_cx(i));
-            t.task_status = TaskStatus::Ready;
+        for (i, task) in tasks.iter_mut().enumerate() {
+            task.task_cx = TaskContext::goto_restore(init_app_cx(i));
+            task.task_status = TaskStatus::Ready;
         }
-
         TaskManager {
             num_app,
             inner: unsafe {
@@ -87,13 +81,8 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
-
-        let mut _unused = TaskContext::zero_init();
-
-        // recod the start time point of the first task
-        inner.tasks[0].start_time = get_time_us();
-
         drop(inner);
+        let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
         unsafe {
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
@@ -136,12 +125,6 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
-            
-            // record the start time of next task when it start to run
-            if  inner.tasks[next].start_time == 0{
-                inner.tasks[next].start_time = get_time_us();
-            } else {}
-
             drop(inner);
             // before this, we should drop local variables that must be dropped manually
             unsafe {
@@ -152,35 +135,6 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
-
-    /// Get the status of current task
-    fn get_status_of_current_task(&self) -> TaskStatus {
-        let inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].task_status
-    }
-
-    /// Get the syscall_times of current task
-    fn get_syscall_times_of_current_task(&self) -> [u32; MAX_SYSCALL_NUM] {
-        let inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].syscall_times
-    }
-
-    /// Get the start_time of current task
-    fn get_start_time_of_current_task(&self) -> usize {
-        let inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].start_time
-    }
-
-    fn plus_one_to_syscall_used(&self, syscall_id: usize) {
-        let mut inner = self.inner.exclusive_access();
-        let current = inner.current_task;
-        inner.tasks[current].syscall_times[syscall_id] += 1;
-    }
-
-    // LAB1: Try to implement your function to update or get task info!
 }
 
 /// Run the first task in task list.
@@ -215,24 +169,3 @@ pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
 }
-
-/// Get the status of current task
-pub fn get_status_of_current_task() -> TaskStatus{
-    TASK_MANAGER.get_status_of_current_task()
-}
-
-/// Get the syscall_times of current task
-pub fn get_syscall_times_of_current_task() -> [u32; MAX_SYSCALL_NUM] {
-    TASK_MANAGER.get_syscall_times_of_current_task()
-}
-
-/// Get the start_time of current task
-pub fn get_start_time_of_current_task() -> usize {
-    TASK_MANAGER.get_start_time_of_current_task()
-}
-
-pub fn plus_one_to_syscall_used(syscall_id: usize) {
-    TASK_MANAGER.plus_one_to_syscall_used(syscall_id);
-}
-// LAB1: Public functions implemented here provide interfaces.
-// You may use TASK_MANAGER member functions to handle requests.
