@@ -1,11 +1,12 @@
 //! Process management syscalls
-use crate::{
-    config::MAX_SYSCALL_NUM,
-    task::{
-        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
-    },
-};
 
+use crate::config::{MAX_SYSCALL_NUM, PAGE_SIZE};
+use crate::mm::{frame_alloc, PTEFlags, PageTable, PhysAddr, VirtAddr, VirtPageNum};
+use crate::task::{
+    current_user_token, exit_current_and_run_next, get_task_info, suspend_current_and_run_next,
+    TaskStatus, task_mmap, task_munmap
+};
+use crate::timer::get_time_us;
 #[repr(C)]
 #[derive(Debug)]
 pub struct TimeVal {
@@ -13,64 +14,77 @@ pub struct TimeVal {
     pub usec: usize,
 }
 
-/// Task information
-#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
 pub struct TaskInfo {
-    /// Task status in it's life cycle
-    status: TaskStatus,
-    /// The numbers of syscall called by task
-    syscall_times: [u32; MAX_SYSCALL_NUM],
-    /// Total running time of task
-    time: usize,
+    pub status: TaskStatus,
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+    pub time: usize,
 }
 
-/// task exits and submit an exit code
-pub fn sys_exit(_exit_code: i32) -> ! {
-    trace!("kernel: sys_exit");
+pub fn sys_exit(exit_code: i32) -> ! {
+    info!("[kernel] Application exited with code {}", exit_code);
     exit_current_and_run_next();
     panic!("Unreachable in sys_exit!");
 }
 
 /// current task gives up resources for other tasks
 pub fn sys_yield() -> isize {
-    trace!("kernel: sys_yield");
     suspend_current_and_run_next();
     0
 }
 
-/// YOUR JOB: get time with second and microsecond
-/// HINT: You might reimplement it with virtual memory management.
-/// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!("kernel: sys_get_time");
-    -1
-}
-
-/// YOUR JOB: Finish sys_task_info to pass testcases
-/// HINT: You might reimplement it with virtual memory management.
-/// HINT: What if [`TaskInfo`] is splitted by two pages ?
-pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
-    trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    -1
-}
-
-// YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
-}
-
-// YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
-}
-/// change data segment size
-pub fn sys_sbrk(size: i32) -> isize {
-    trace!("kernel: sys_sbrk");
-    if let Some(old_brk) = change_program_brk(size) {
-        old_brk as isize
+// YOUR JOB: 引入虚地址后重写 sys_get_time
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    let virt_addr = VirtAddr(ts as usize);
+    if let Some(phys_addr) = virt2phys_addr(virt_addr) {
+        let us = get_time_us();
+        let kernel_ts = phys_addr.0 as *mut TimeVal;
+        unsafe {
+            *kernel_ts = TimeVal {
+                sec: us / 1_000_000,
+                usec: us % 1_000_000,
+            };
+        }
+        0
     } else {
         -1
+    }
+}
+
+// CLUE: 从 ch4 开始不再对调度算法进行测试~
+pub fn sys_set_priority(_prio: isize) -> isize {
+    -1
+}
+
+// YOUR JOB: 扩展内核以实现 sys_mmap 和 sys_munmap
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    task_mmap(start, len, port)
+}
+
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    task_munmap(start, len)
+}
+
+// YOUR JOB: 引入虚地址后重写 sys_task_info
+pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
+    if let Some(phys_addr) = virt2phys_addr(VirtAddr(ti as usize)) {
+        get_task_info(phys_addr.0 as *mut TaskInfo);
+        0
+    } else {
+        -1
+    }
+}
+
+fn virt2phys_addr(virt_addr: VirtAddr) -> Option<PhysAddr> {
+    let offset = virt_addr.page_offset();
+    let vpn = virt_addr.floor();
+    let ppn = PageTable::from_token(current_user_token())
+        .translate(vpn)
+        .map(|entry| entry.ppn());
+    if let Some(ppn) = ppn {
+        Some(PhysAddr::combine(ppn, offset))
+    } else {
+        println!("virt2phys_addr() fail");
+        None
     }
 }
