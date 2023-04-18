@@ -1,41 +1,37 @@
-//! Task management implementation
+//! Implementation of process management mechanism
 //!
-//! Everything about task management, like starting and switching tasks is
-//! implemented here.
+//! Here is the entry for process scheduling required by other modules
+//! (such as syscall or clock interrupt).
+//! By suspending or exiting the current process, you can
+//! modify the process state, manage the process queue through TASK_MANAGER,
+//! and switch the control flow through PROCESSOR.
 //!
-//! A single global instance of [`TaskManager`] called `TASK_MANAGER` controls
-//! all the tasks in the whole operating system.
-//!
-//! A single global instance of [`Processor`] called `PROCESSOR` monitors running
-//! task(s) for each core.
-//!
-//! A single global instance of `PID_ALLOCATOR` allocates pid for user apps.
-//!
-//! Be careful when you see `__switch` ASM function in `switch.S`. Control flow around this function
+//! Be careful when you see [`__switch`]. Control flow around this function
 //! might not be what you expect.
+
 mod context;
-mod id;
 mod manager;
+mod pid;
 mod processor;
 mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::loader::get_app_data_by_name;
+use crate::{loader::get_app_data_by_name, mm::{VirtPageNum, MapPermission, VirtAddr}, console::print};
 use alloc::sync::Arc;
 use lazy_static::*;
-pub use manager::{fetch_task, TaskManager};
+use manager::fetch_task;
 use switch::__switch;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
-pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 pub use manager::add_task;
+pub use pid::{pid_alloc, KernelStack, PidHandle};
 pub use processor::{
     current_task, current_trap_cx, current_user_token, run_tasks, schedule, take_current_task,
-    Processor,
 };
-/// Suspend the current 'Running' task and run the next task in task list.
+
+/// Make current task suspended and switch to the next task
 pub fn suspend_current_and_run_next() {
     // There must be an application running.
     let task = take_current_task().unwrap();
@@ -54,23 +50,10 @@ pub fn suspend_current_and_run_next() {
     schedule(task_cx_ptr);
 }
 
-/// pid of usertests app in make run TEST=1
-pub const IDLE_PID: usize = 0;
-
-/// Exit the current 'Running' task and run the next task in task list.
+/// Exit current task, recycle process resources and switch to the next task
 pub fn exit_current_and_run_next(exit_code: i32) {
     // take from Processor
     let task = take_current_task().unwrap();
-
-    let pid = task.getpid();
-    if pid == IDLE_PID {
-        println!(
-            "[kernel] Idle process exit with exit_code {} ...",
-            exit_code
-        );
-        panic!("All applications completed!");
-    }
-
     // **** access current TCB exclusively
     let mut inner = task.inner_exclusive_access();
     // Change status to Zombie
@@ -111,7 +94,77 @@ lazy_static! {
     ));
 }
 
-///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+use crate::config::PAGE_SIZE;
+#[allow(dead_code, unused_variables, unused)]
+pub fn mmap(start: usize, len: usize, port: usize) -> isize{
+    println!("1");
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+
+    println!("2");
+    let start_va = VirtPageNum::from(start / PAGE_SIZE);
+    let end_va = VirtPageNum::from((start+len) / PAGE_SIZE);
+
+    println!("3");
+    for vpn in start_va.0..end_va.0 {
+        if inner.memory_set.find_vpn(VirtPageNum(vpn)) {
+            // println!("{}  {}", start / PAGE_SIZE, (start + len) / PAGE_SIZE);
+            println!("there is a overlap!!!");
+            return -1;
+        }
+    }
+
+    println!("4");
+    let permission = MapPermission::from_bits(((port << 1) | 16) as u8);
+    
+    println!("5");
+    inner.memory_set.insert_framed_area(VirtAddr::from(start_va), VirtAddr::from(end_va), permission.unwrap());
+    // inner.memory_set.insert_framed_area(VirtAddr::from(start), VirtAddr::from(start+len), permission.unwrap());
+
+    println!("6");
+    for vpn in start_va.0..end_va.0 {
+            if false == inner.memory_set.find_vpn(VirtPageNum(vpn)) {
+            return -1;
+        }
+    }
+    println!("7");
+    0
+}
+
+#[allow(unused)]
+pub fn unmmap(start: usize, len: usize) -> isize {
+    println!("inside unmmap function !!!") ;
+    println!("A1");
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+
+    println!("A2");
+    let start_va = VirtPageNum::from(start / PAGE_SIZE);
+    let end_va = VirtPageNum::from((start+len) / PAGE_SIZE);
+
+    println!("A");
+    for vpn in start_va.0..end_va.0 { 
+        if !(inner.memory_set.find_vpn(VirtPageNum(vpn))) {
+            println!("it seem couldn't find the pte");
+            return -1;
+        }
+    }
+    println!("B");
+    for vpn in start_va.0..end_va.0 {
+        inner.memory_set.delete_pte_from(VirtPageNum(vpn));
+    }
+    println!("successed!!!");
+    0
+}
+
+pub fn set_prio(prio: u8) {
+    
+    let task = current_task().unwrap();
+    let mut inner = task.inner_exclusive_access();
+
+    inner.piro = prio;
 }

@@ -2,20 +2,17 @@
 
 #![allow(unused)]
 
-use core::arch::asm;
-
 const SBI_SET_TIMER: usize = 0;
 const SBI_CONSOLE_PUTCHAR: usize = 1;
 const SBI_CONSOLE_GETCHAR: usize = 2;
 const SBI_SHUTDOWN: usize = 8;
 
-/// general sbi call
 #[inline(always)]
+/// general sbi call
 fn sbi_call(which: usize, arg0: usize, arg1: usize, arg2: usize) -> usize {
     let mut ret;
     unsafe {
-        asm!(
-            "li x16, 0",
+        core::arch::asm!(
             "ecall",
             inlateout("x10") arg0 => ret,
             in("x11") arg1,
