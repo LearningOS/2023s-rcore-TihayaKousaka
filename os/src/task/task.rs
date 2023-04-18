@@ -1,5 +1,3 @@
-//! Types related to task management
-
 use super::TaskContext;
 use crate::config::{MAX_APP_NUM, MAX_SYSCALL_NUM};
 

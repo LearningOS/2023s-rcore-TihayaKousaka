@@ -31,4 +31,3 @@ __switch:
     # restore kernel stack of next task
     ld sp, 8(a1)
     ret
-
