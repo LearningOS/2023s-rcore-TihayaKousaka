@@ -35,6 +35,11 @@ pub struct TaskControlBlock {
 }
 
 impl TaskControlBlock {
+    // pub fn refresh_stop_watch(&mut self) -> usize {
+    //     let start_time = self.stop_watch;
+    //     self.stop_watch = get_time_ms();
+    //     self.stop_watch - start_time
+    // }
     /// get the trap context
     pub fn get_trap_cx(&self) -> &'static mut TrapContext {
         self.trap_cx_ppn.get_mut()

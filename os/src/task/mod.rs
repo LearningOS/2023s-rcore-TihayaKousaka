@@ -24,8 +24,8 @@ pub use task::{TaskControlBlock, TaskStatus};
 use crate::config;
 pub use crate::mm;
 use crate::timer;
-
-
+pub static mut RUN_TIME: usize = 0;
+use crate::timer::get_time_ms;
 
 pub use context::TaskContext;
 
@@ -51,6 +51,16 @@ struct TaskManagerInner {
     tasks: Vec<TaskControlBlock>,
     /// id of current `Running` task
     current_task: usize,
+
+    pub stop_watch: usize,
+}
+
+impl TaskManagerInner {
+    fn refresh_stop_watch(&mut self) -> usize {
+        let start_time = self.stop_watch;
+        self.stop_watch = get_time_ms();
+        self.stop_watch - start_time
+    }
 }
 
 lazy_static! {
@@ -69,6 +79,7 @@ lazy_static! {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    stop_watch: 0,
                 })
             },
         }
@@ -85,6 +96,7 @@ impl TaskManager {
         let next_task = &mut inner.tasks[0];
         next_task.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
+        unsafe {RUN_TIME += inner.refresh_stop_watch();}
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
@@ -258,6 +270,18 @@ impl TaskManager {
 
         return 0;
     }
+
+    fn get_current_task_num(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.current_task
+    }
+
+    fn get_current_task_status(&self) -> TaskStatus {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_status
+    }
+
 }
 
 /// Run the first task in task list.
@@ -316,6 +340,10 @@ pub fn update_syscall_times(id: usize) {
     TASK_MANAGER.update_syscall_times(id);
 }
 
+pub fn get_current_task_status() -> TaskStatus {
+    TASK_MANAGER.get_current_task_status()
+}
+
 pub fn get_current_task_time() -> usize {
     TASK_MANAGER.get_start_time() / 1000
 }
@@ -328,4 +356,8 @@ pub fn mmap(start: usize, len: usize, port: usize) -> isize {
 /// munmap
 pub fn munmap(start: usize, len: usize) -> isize {
     TASK_MANAGER.munmap(start, len)
+}
+
+pub fn get_current_task_num() -> usize {
+    TASK_MANAGER.get_current_task_num()
 }

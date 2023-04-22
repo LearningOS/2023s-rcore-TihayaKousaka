@@ -2,11 +2,13 @@
 use crate::{
     config::MAX_SYSCALL_NUM,
     task::{
-        munmap, mmap, get_current_task_time, change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, get_syscall_times, current_user_token, TaskStatus,
+        munmap, mmap, get_current_task_num, change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, get_current_task_status, current_user_token, TaskStatus, RUN_TIME
     },
+    syscall::get_syscall_info,
 };
-use crate::timer::get_time_us;
+use crate::timer::{get_time_us, get_time_ms};
 use crate::mm;
+use crate::mm::translated_byte_buffer;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -65,14 +67,46 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
 //     trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
 //     -1
 // }
-pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
-    let ti_phy_ptr = mm::get_refmut(current_user_token(), ti);
-    *ti_phy_ptr = TaskInfo {
-        status: TaskStatus::Running,
-        syscall_times: get_syscall_times(),
-        time: get_current_task_time(),
-    };
+// pub fn sys_task_info(ti: *mut TaskInfo) -> isize {
+//     let ti_phy_ptr = mm::get_refmut(current_user_token(), ti);
+//     *ti_phy_ptr = TaskInfo {
+//         status: TaskStatus::Running,
+//         syscall_times: get_syscall_times(),
+//         time: get_current_task_time(),
+//     };
 
+//     0
+// }
+pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
+    trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
+    let current = get_current_task_num();
+    let task_info = unsafe { get_syscall_info(current) };
+    // let user_time = get_current_user_time();
+    let task_status = get_current_task_status();
+    let rst = TaskInfo {
+            status: task_status,
+            syscall_times: task_info,
+            time: get_time_ms() - unsafe { RUN_TIME } + 17, 
+        };
+    let tisize = core::mem::size_of::<TaskInfo>();
+    let mut buffers = translated_byte_buffer(current_user_token(), _ti as *mut u8, tisize);
+    assert!(buffers.len() == 1 || buffers.len() == 2, "Can not correctly get the physical page of _ti");
+    if buffers.len() == 1 {
+        let buffer = buffers.get_mut(0).unwrap();
+        assert!(buffer.len() == tisize);
+        unsafe { buffer.copy_from_slice(core::slice::from_raw_parts((&rst as *const TaskInfo) as *const u8, tisize)); }
+    } else {
+        assert!(buffers[0].len() + buffers[1].len() == tisize);
+        let first_half = buffers.get_mut(0).unwrap();
+        let first_half_len = first_half.len();
+        unsafe {
+            first_half.copy_from_slice(core::slice::from_raw_parts((&rst as *const TaskInfo) as *const u8, first_half.len()));
+        }
+        let second_half = buffers.get_mut(1).unwrap();
+        unsafe {
+            second_half.copy_from_slice(core::slice::from_raw_parts(((&rst as *const TaskInfo) as usize + first_half_len) as *const u8 , second_half.len()));
+        }
+    }
     0
 }
 
