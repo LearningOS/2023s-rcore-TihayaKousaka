@@ -2,7 +2,7 @@
 use super::TaskContext;
 use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 use crate::config::TRAP_CONTEXT_BASE;
-use crate::fs::{File, Stdin, Stdout};
+use crate::fs::{File, Stdin, Stdout, StatMode};
 use crate::mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE};
 use crate::sync::UPSafeCell;
 use crate::trap::{trap_handler, TrapContext};
@@ -10,7 +10,18 @@ use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefMut;
+pub const BIG_STRIDE:u32=u32::MAX;
 
+#[derive(Copy,Clone)]
+pub struct CurTaskInfo{
+    pub sys_write:  u32,
+    pub sys_exit:   u32,
+    pub sys_info:   u32,
+    pub sys_time:   u32,
+    pub sys_yield:  u32,
+    pub begin_time: usize,
+    pub task_status:TaskStatus,
+}
 /// Task control block structure
 ///
 /// Directly save the contents that will not change during running
@@ -71,6 +82,10 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    pub task_info: CurTaskInfo,
+    pub priority: u32,
+    pub stride: u32,
 }
 
 impl TaskControlBlockInner {
@@ -93,6 +108,14 @@ impl TaskControlBlockInner {
             self.fd_table.push(None);
             self.fd_table.len() - 1
         }
+    }
+    pub fn get_ino(&self,fd:usize)->usize{
+        let osinode=self.fd_table[fd].as_ref().unwrap();
+        osinode.get_ino()
+    }
+    pub fn get_file_type(&self,fd:usize)->StatMode{
+        let osinode=self.fd_table[fd].as_ref().unwrap();
+        osinode.get_file_type()
     }
 }
 
@@ -135,6 +158,9 @@ impl TaskControlBlock {
                     ],
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    task_info:CurTaskInfo::zero_init(),
+                    priority:16,
+                    stride:BIG_STRIDE/16,
                 })
             },
         };
@@ -216,6 +242,9 @@ impl TaskControlBlock {
                     fd_table: new_fd_table,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    task_info:CurTaskInfo::zero_init(),
+                    priority:16,
+                    stride:BIG_STRIDE/16,
                 })
             },
         });
@@ -261,6 +290,31 @@ impl TaskControlBlock {
             None
         }
     }
+
+    pub fn task_mmap(&self,_start: usize, _len: usize, _port: usize) -> isize {
+        let mut inner=self.inner_exclusive_access();
+        let ret=inner.memory_set.mmap(_start, _len, _port);
+        drop(inner);
+        ret
+    }
+
+    pub fn task_munmap(&self,_start: usize, _len: usize) -> isize {
+        let mut inner=self.inner_exclusive_access();
+        let ret=inner.memory_set.munmap(_start, _len);
+        drop(inner);
+        ret
+    }
+
+    pub fn spwan(self:&Arc<TaskControlBlock>, _elf_data: &[u8])-> Arc<TaskControlBlock>{
+        let task_control_block=Arc::new(TaskControlBlock::new(_elf_data));
+        let mut inner=task_control_block.inner_exclusive_access();
+        inner.parent=Some(Arc::downgrade(self));
+        drop(inner);
+        let mut parent_inner=self.inner_exclusive_access();
+        parent_inner.children.push(task_control_block.clone());
+        drop(parent_inner);
+        task_control_block
+    }
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -275,3 +329,10 @@ pub enum TaskStatus {
     /// exited
     Zombie,
 }
+
+impl CurTaskInfo{
+    pub fn zero_init() -> Self{
+        CurTaskInfo { sys_write: 0, sys_exit: 0, sys_info: 0, sys_time: 0, sys_yield: 0, begin_time: 0, task_status:TaskStatus:: Ready }
+    }
+}
+

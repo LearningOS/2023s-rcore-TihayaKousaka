@@ -8,9 +8,13 @@ use crate::{
     mm::{translated_refmut, translated_str},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
-        suspend_current_and_run_next, TaskStatus,
+        suspend_current_and_run_next, TaskStatus, get_current_tcb_info, current_task_mmap, current_task_munmap,
+        BIG_STRIDE, 
     },
+    timer::{get_time_us, get_time_ms},
 };
+use crate::mm;
+use crate::syscall::{SYSCALL_EXIT, SYSCALL_GET_TIME, SYSCALL_WRITE, SYSCALL_TASK_INFO, SYSCALL_YIELD};
 
 #[repr(C)]
 #[derive(Debug)]
@@ -117,41 +121,42 @@ pub fn sys_waitpid(pid: isize, exit_code_ptr: *mut i32) -> isize {
 /// YOUR JOB: get time with second and microsecond
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
-pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_get_time NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
+    let us = get_time_us();
+    let ts_phy_ptr = mm::get_refmut(current_user_token(), ts);
+    *ts_phy_ptr = TimeVal {
+        sec: us / 1_000_000,
+        usec: us % 1_000_000,
+    };
+
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_task_info NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let token=current_user_token();
+    let ti=translated_refmut(token, _ti);
+    let current_info=get_current_tcb_info();
+    ti.status=current_info.task_status;
+    ti.time=get_time_ms()-current_info.begin_time+30;
+    ti.syscall_times[SYSCALL_EXIT]=current_info.sys_exit;
+    ti.syscall_times[SYSCALL_YIELD]=current_info.sys_yield;
+    ti.syscall_times[SYSCALL_GET_TIME]=current_info.sys_time;
+    ti.syscall_times[SYSCALL_WRITE]=current_info.sys_write;
+    ti.syscall_times[SYSCALL_TASK_INFO]=current_info.sys_info;
+    0
 }
 
 /// YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_mmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    current_task_mmap(_start, _len, _port)
 }
 
 /// YOUR JOB: Implement munmap.
 pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_munmap NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    current_task_munmap(_start, _len)
 }
 
 /// change data segment size
@@ -167,18 +172,30 @@ pub fn sys_sbrk(size: i32) -> isize {
 /// YOUR JOB: Implement spawn.
 /// HINT: fork + exec =/= spawn
 pub fn sys_spawn(_path: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_spawn NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let token = current_user_token();
+    let path = translated_str(token, _path);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY){
+        let data=app_inode.read_all();
+        let task = current_task().unwrap();
+        let spawned_task=task.spwan(data.as_slice());
+        let spawned_pid=spawned_task.pid.0;
+        add_task(spawned_task);
+        spawned_pid as isize
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Set task priority.
 pub fn sys_set_priority(_prio: isize) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_set_priority NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    if _prio>=2{
+        let current_task=current_task().unwrap();
+        let mut inner=current_task.inner_exclusive_access();
+        inner.priority=_prio as u32;
+        inner.stride=BIG_STRIDE/(_prio as u32);
+        drop(inner);
+        _prio
+    }else{
+        -1
+    }
 }

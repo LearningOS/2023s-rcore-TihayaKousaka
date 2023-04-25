@@ -276,3 +276,21 @@ impl Iterator for UserBufferIterator {
         }
     }
 }
+
+pub fn get_refmut<T>(token: usize, ptr: *mut T) -> &'static mut T {
+    let page_table = PageTable::from_token(token);
+    let virtual_address = VirtAddr::from(ptr as usize);
+    let offset = virtual_address.page_offset();
+
+    let virtual_page_number = virtual_address.floor();
+
+    let physical_page_entry = page_table.find_pte(virtual_page_number).unwrap();
+
+    let physical_page_num = physical_page_entry.ppn();
+
+    let start_address = PhysAddr::from(physical_page_num);
+
+    let physical_address = PhysAddr::from(usize::from(start_address) + offset);
+
+    physical_address.get_mut()
+}

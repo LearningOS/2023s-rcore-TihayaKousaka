@@ -1,7 +1,9 @@
 //! File and filesystem-related syscalls
-use crate::fs::{open_file, OpenFlags, Stat};
-use crate::mm::{translated_byte_buffer, translated_str, UserBuffer};
+use crate::fs::{open_file, OpenFlags, Stat, link_file, unlink_file};
+use crate::mm::{translated_byte_buffer, translated_str, UserBuffer, };
 use crate::task::{current_task, current_user_token};
+use crate::mm::translated_refmut;
+use crate::fs::count_nlink;
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     trace!("kernel:pid[{}] sys_write", current_task().unwrap().pid.0);
@@ -77,27 +79,38 @@ pub fn sys_close(fd: usize) -> isize {
 
 /// YOUR JOB: Implement fstat.
 pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_fstat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    //println!("begin sys fstat");
+    let token=current_user_token();
+    let st=translated_refmut(token, _st);
+    let task=current_task().unwrap();
+    let inner=task.inner_exclusive_access();
+    //println!("begin get info");
+    if _fd>2&&_fd<inner.fd_table.len(){
+        st.dev=0;
+        let ino=inner.get_ino(_fd);
+        //println!("end get ino");
+        st.ino=ino as u64;
+        st.mode=inner.get_file_type(_fd);
+        //println!("end get file mode");
+        st.nlink=count_nlink(ino);
+        //println!("end count nlink");
+        0
+    }else{
+        -1
+    }
 }
 
 /// YOUR JOB: Implement linkat.
 pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_linkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let token=current_user_token();
+    let old_name=translated_str(token, _old_name);
+    let new_name=translated_str(token, _new_name);
+    link_file(old_name.as_str(),new_name.as_str())
 }
 
 /// YOUR JOB: Implement unlinkat.
 pub fn sys_unlinkat(_name: *const u8) -> isize {
-    trace!(
-        "kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED",
-        current_task().unwrap().pid.0
-    );
-    -1
+    let token=current_user_token();
+    let name=translated_str(token, _name);
+    unlink_file(name.as_str())
 }

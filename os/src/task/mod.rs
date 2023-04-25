@@ -28,7 +28,7 @@ pub use context::TaskContext;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+pub use task::{TaskControlBlock, TaskStatus, CurTaskInfo, BIG_STRIDE};
 
 pub use id::{kstack_alloc, pid_alloc, KernelStack, PidHandle};
 pub use manager::add_task;
@@ -119,4 +119,20 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+pub fn get_current_tcb_info()->CurTaskInfo{
+    let current_task=current_task().unwrap();
+    let inner=current_task.inner_exclusive_access();
+    inner.task_info.clone()
+}
+
+pub fn current_task_mmap(_start: usize, _len: usize, _port: usize) -> isize {
+    let current_task=current_task().unwrap();
+    current_task.task_mmap(_start, _len, _port)
+}
+
+pub fn current_task_munmap(_start: usize, _len: usize) -> isize {
+    let current_task=current_task().unwrap();
+    current_task.task_munmap(_start, _len)
 }

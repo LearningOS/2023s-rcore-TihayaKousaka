@@ -318,6 +318,82 @@ impl MemorySet {
             false
         }
     }
+
+    pub fn resolve_port(&self,port:usize)->MapPermission{
+        match port {
+            1=>MapPermission::R|MapPermission::U,
+            2=>MapPermission::W|MapPermission::U,
+            3=>MapPermission::W|MapPermission::R|MapPermission::U,
+            4=>MapPermission::X|MapPermission::U,
+            5=>MapPermission::X|MapPermission::R|MapPermission::U,
+            6=>MapPermission::W|MapPermission::X|MapPermission::U,
+            7=>MapPermission::W|MapPermission::R|MapPermission::X|MapPermission::U,
+            _=>MapPermission { bits: 0 },
+        }
+    }
+
+    pub fn mmap_check_port_start(&self,_start: usize, _len: usize, _port: usize)->bool{
+        if (_port&!0x7) != 0 || (_port&0x7==0){
+            return false;
+        }
+        if (_start&(4096-1)) != 0{
+            return false;
+        }
+        true
+    }
+
+    pub fn is_mapped_before(&self,start_va:VirtAddr,end_va:VirtAddr)->bool{
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let v_range=VPNRange::new(start_vpn, end_vpn);
+        for vpn in v_range{
+            for mem_area in self.areas.iter(){
+                if mem_area.data_frames.contains_key(&vpn){
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn mmap(&mut self,_start: usize, _len: usize, _port: usize)->isize{//这里相当于直接插入了一个新的逻辑段
+        match self.mmap_check_port_start(_start,_len,_port) {
+            true=>{
+                let permission=self.resolve_port(_port);
+                let start_va=VirtAddr(_start);
+                let end_va=VirtAddr(_start+_len);
+                if self.is_mapped_before(start_va,end_va){
+                    return -1;
+                }
+                self.insert_framed_area(start_va, end_va, permission);
+                0
+            },
+            false=>-1,
+        }
+    }
+
+    pub fn munmap(&mut self,_start: usize, _len: usize) -> isize {
+        let start_va=VirtAddr(_start);
+        let end_va=VirtAddr(_start+_len);
+        let start_vpn: VirtPageNum = start_va.floor();
+        let end_vpn: VirtPageNum = end_va.ceil();
+        let v_range=VPNRange::new(start_vpn, end_vpn);
+        let mut flag:bool=false;
+        for vpn in v_range{
+            for area in self.areas.iter_mut(){
+                if area.data_frames.contains_key(&vpn){
+                    area.unmap_one(&mut self.page_table, vpn);
+                    flag=true;
+                    break;
+                }
+            }
+            if flag==false{
+                return -1;
+            }
+            flag=false;
+        }
+        return 0;
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {

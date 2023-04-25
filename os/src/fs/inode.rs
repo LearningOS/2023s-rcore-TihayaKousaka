@@ -124,6 +124,33 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+pub fn link_file(old_name: &str,new_name: &str)->isize{
+    if old_name==new_name{
+        return -1;
+    }
+    match ROOT_INODE.find(old_name){
+        Some(_)=>{
+            ROOT_INODE.link(old_name,new_name);
+            0
+        },
+        None=>-1
+    }
+}
+
+pub fn unlink_file(name:&str)->isize{
+    match ROOT_INODE.find(name) {
+        Some(_)=>{
+            ROOT_INODE.unlink(name);
+            0
+        },
+        None=>-1,
+    }
+}
+
+pub fn count_nlink(inode_id:usize)->u32{
+    ROOT_INODE.get_nlink_num(inode_id)
+}
+
 impl File for OSInode {
     fn readable(&self) -> bool {
         self.readable
