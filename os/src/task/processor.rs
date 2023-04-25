@@ -11,6 +11,7 @@ use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::sync::Arc;
 use lazy_static::*;
+use crate::mm::{VirtPageNum, PhysPageNum};
 
 /// Processor management structure
 pub struct Processor {
@@ -108,4 +109,11 @@ pub fn schedule(switched_task_cx_ptr: *mut TaskContext) {
     unsafe {
         __switch(switched_task_cx_ptr, idle_task_cx_ptr);
     }
+}
+// second version
+pub fn translate(vpn: VirtPageNum)-> PhysPageNum {
+    let cur_pcb = current_task().unwrap();
+    let mem_set = &cur_pcb.inner_exclusive_access().memory_set;
+    let ppn = mem_set.translate(vpn).unwrap().ppn();
+    return ppn;
 }

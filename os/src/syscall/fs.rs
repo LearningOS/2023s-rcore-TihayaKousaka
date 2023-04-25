@@ -2,8 +2,14 @@
 use crate::fs::{open_file, OpenFlags, Stat, link_file, unlink_file};
 use crate::mm::{translated_byte_buffer, translated_str, UserBuffer, };
 use crate::task::{current_task, current_user_token};
-use crate::mm::translated_refmut;
-use crate::fs::count_nlink;
+//first version
+//use crate::mm::translated_refmut;
+//use crate::fs::count_nlink;
+//end here
+use crate::fs::get_hard_links_by_inode_number;
+use crate::fs::StatMode;
+use crate::mm::VirtAddr;
+use crate::task::translate;
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     trace!("kernel:pid[{}] sys_write", current_task().unwrap().pid.0);
@@ -78,25 +84,65 @@ pub fn sys_close(fd: usize) -> isize {
 }
 
 /// YOUR JOB: Implement fstat.
+// pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
+//     //println!("begin sys fstat");
+//     let token=current_user_token();
+//     let st=translated_refmut(token, _st);
+//     let task=current_task().unwrap();
+//     let inner=task.inner_exclusive_access();
+//     //println!("begin get info");
+//     if _fd>2&&_fd<inner.fd_table.len(){
+//         st.dev=0;
+//         let ino=inner.get_ino(_fd);
+//         //println!("end get ino");
+//         st.ino=ino as u64;
+//         st.mode=inner.get_file_type(_fd);
+//         //println!("end get file mode");
+//         st.nlink=count_nlink(ino);
+//         //println!("end count nlink");
+//         0
+//     }else{
+//         -1
+//     }
+// }
+// 获取指定文件描述符所关联的文件的状态信息并存储在传入的指向 Stat 结构体的指针 _st 所指向的内存中
+// 将与指定文件描述符所关联的文件的状态信息存储在指向 Stat 结构体的指针 _st 所指向的内存中。
+// 在函数中，首先获取当前进程的任务结构体，并获取该任务的文件描述符表的排他访问权。
+// 然后检查文件描述符的合法性，如果文件描述符非法，则返回 -1；否则获取与之关联的 inode，获取该 inode 的编号
+// 比较难！
 pub fn sys_fstat(_fd: usize, _st: *mut Stat) -> isize {
-    //println!("begin sys fstat");
-    let token=current_user_token();
-    let st=translated_refmut(token, _st);
-    let task=current_task().unwrap();
-    let inner=task.inner_exclusive_access();
-    //println!("begin get info");
-    if _fd>2&&_fd<inner.fd_table.len(){
-        st.dev=0;
-        let ino=inner.get_ino(_fd);
-        //println!("end get ino");
-        st.ino=ino as u64;
-        st.mode=inner.get_file_type(_fd);
-        //println!("end get file mode");
-        st.nlink=count_nlink(ino);
-        //println!("end count nlink");
-        0
+    let task = current_task().unwrap();
+    let inner = task.inner_exclusive_access();
+    if _fd >= inner.fd_table.len(){
+        return -1;
+    }
+    if let Some(inode) = &inner.fd_table[_fd]{
+        let ino = inode.get_inode_number();
+        let nlink = get_hard_links_by_inode_number(ino as u32) as u32;
+        let t = inode.get_type();
+        let mode = if t == 0{StatMode::DIR}else{StatMode::FILE};
+
+        drop(inner);
+        let vaddr = _st as usize;
+        let vaddr_obj = VirtAddr(vaddr);
+        let page_off = vaddr_obj.page_offset();
+    
+        let vpn = vaddr_obj.floor();
+    
+        let ppn = translate(vpn);
+    
+        let paddr : usize = ppn.0 << 12 | page_off;
+        let st = paddr as *mut Stat;
+
+        unsafe {
+            (*st).ino = ino as u64;
+            (*st).nlink = nlink;
+            (*st).mode = mode;
+        }
+        return 0;
+
     }else{
-        -1
+        return -1;
     }
 }
 

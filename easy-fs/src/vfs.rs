@@ -6,6 +6,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::{Mutex, MutexGuard};
+use crate::BLOCK_SZ;
 /// Virtual filesystem layer over easy-fs
 pub struct Inode {
     block_id: usize,
@@ -253,5 +254,48 @@ impl Inode {
         self.read_disk_inode(|disk_inode|{
             self.count_nlink(inode_id, disk_inode)
         })
+    }
+
+    // seconde version
+    pub fn get_inode_number(&self) -> usize{
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inodes_per_block = (BLOCK_SZ / inode_size) as u32;
+        let tem1 = self.block_id - self.fs.lock().inode_area_start_block as usize;
+        
+        return tem1 * (inodes_per_block as usize) + self.block_offset/inode_size
+    }
+
+    pub fn get_inode_number_times(&self, inode_number: u32) -> usize{
+        // self.read_disk_inode(|disk_inode| {
+        //     self.get_times_by_inode_number(inode_number, disk_inode)
+        // })
+        let _fs = self.fs.lock();
+        self.read_disk_inode(|disk_inode| {
+            let file_count = (disk_inode.size as usize) / DIRENT_SZ;
+            let mut res = 0;
+            for i in 0..file_count {
+                let mut dirent = DirEntry::empty();
+                assert_eq!(
+                    disk_inode.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device,),
+                    DIRENT_SZ,
+                );
+                if dirent.inode_id() == inode_number{
+                    res += 1;
+                }
+            }
+            res
+        })
+    }
+    pub fn get_inode_type(&self) -> usize{
+        self.read_disk_inode(|disk_inode| {
+            self.get_type(disk_inode)
+        })
+    }
+    pub fn get_type(&self, disk_inode: &DiskInode) -> usize{
+        if disk_inode.is_dir(){
+            return 0;
+        }else{
+            return 1;
+        }
     }
 }

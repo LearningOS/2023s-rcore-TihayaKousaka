@@ -52,6 +52,11 @@ impl OSInode {
         }
         v
     }
+    fn get_inode_number(&self) -> usize {
+        let mut inner = self.inner.exclusive_access();
+        return inner.inode.get_inode_number();
+
+    }
 }
 
 lazy_static! {
@@ -182,4 +187,15 @@ impl File for OSInode {
         }
         total_write_size
     }
+    fn get_inode_number(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        return inner.inode.get_inode_number();
+    }
+    fn get_type(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        return inner.inode.get_inode_type()
+    }
+}
+pub fn get_hard_links_by_inode_number(inode_num: u32) -> usize{
+    ROOT_INODE.get_inode_number_times(inode_num)
 }
